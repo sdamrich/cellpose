@@ -40,9 +40,12 @@ urls = ['https://www.cellpose.org/models/cyto_0',
         'https://www.cellpose.org/models/size_nucleitorch_0.npy']
 
 
-def download_model_weights(urls=urls):
+def download_model_weights(urls=urls, cp_dir=None):
     # cellpose directory
-    cp_dir = pathlib.Path.home().joinpath('.cellpose')
+    if cp_dir is None:
+        cp_dir = pathlib.Path.home().joinpath('.cellpose')
+    else:
+        cp_dir = pathlib.Path(cp_dir).joinpath('.cellpose')
     cp_dir.mkdir(exist_ok=True)
     model_dir = cp_dir.joinpath('models')
     model_dir.mkdir(exist_ok=True)
@@ -55,8 +58,14 @@ def download_model_weights(urls=urls):
             models_logger.info('Downloading: "{}" to {}\n'.format(url, cached_file))
             utils.download_url_to_file(url, cached_file, progress=True)
 
-download_model_weights()
-model_dir = pathlib.Path.home().joinpath('.cellpose', 'models')
+cp_dir = None
+if os.path.exists("/net/scratch/sdamrich"):
+    cp_dir = "/net/scratch/sdamrich"
+download_model_weights(cp_dir=cp_dir)
+if cp_dir is None:
+    model_dir = pathlib.Path.home().joinpath('.cellpose', 'models')
+else:
+    model_dir = pathlib.Path(cp_dir).joinpath('.cellpose', 'models')
 
 def dx_to_circ(dP):
     """ dP is 2 x Y x X => 'optic' flow representation """
@@ -254,7 +263,7 @@ class Cellpose():
 
         tic = time.time()
         models_logger.info('~~~ FINDING MASKS ~~~')
-        masks, flows, styles = self.cp.eval(x, 
+        masks, flows, styles = self.cp.eval(x,
                                             batch_size=batch_size, 
                                             invert=invert, 
                                             diameter=diameter,
@@ -274,7 +283,9 @@ class Cellpose():
                                             flow_threshold=flow_threshold, 
                                             cellprob_threshold=cellprob_threshold,
                                             min_size=min_size, 
-                                            stitch_threshold=stitch_threshold)
+                                            stitch_threshold=stitch_threshold,
+                                            normalize=normalize # this is added
+                                            )
         models_logger.info('>>>> TOTAL TIME %0.2f sec'%(time.time()-tic0))
     
         return masks, flows, styles, diams
@@ -501,18 +512,18 @@ class CellposeModel(UnetModel):
         else:
             x = transforms.convert_image(x, channels, channel_axis=channel_axis, z_axis=z_axis,
                                          do_3D=do_3D, normalize=False, invert=False, nchan=self.nchan)
+
             if x.ndim < 4:
                 x = x[np.newaxis,...]
             self.batch_size = batch_size
             rescale = self.diam_mean / diameter if (rescale is None and (diameter is not None and diameter>0)) else rescale
             rescale = 1.0 if rescale is None else rescale
-            
+
             if isinstance(self.pretrained_model, list) and not net_avg:
                 self.net.load_model(self.pretrained_model[0], cpu=(not self.gpu))
                 if not self.torch:
                     self.net.collect_params().grad_req = 'null'
-
-            masks, styles, dP, cellprob, p = self._run_cp(x, 
+            masks, styles, dP, cellprob, p = self._run_cp(x,
                                                           compute_masks=compute_masks,
                                                           normalize=normalize,
                                                           invert=invert,
@@ -556,6 +567,7 @@ class CellposeModel(UnetModel):
             tqdm_out = utils.TqdmToLogger(models_logger, level=logging.INFO)
             iterator = trange(nimg, file=tqdm_out) if nimg>1 else range(nimg)
             styles = np.zeros((nimg, self.nbase[-1]), np.float32)
+
             if resample:
                 dP = np.zeros((2, nimg, shape[1], shape[2]), np.float32)
                 cellprob = np.zeros((nimg, shape[1], shape[2]), np.float32)
@@ -565,11 +577,10 @@ class CellposeModel(UnetModel):
             for i in iterator:
                 img = np.asarray(x[i])
                 if normalize or invert:
-                    img = transforms.normalize_img(img, invert=invert)
+                    img = transforms.normalize_img(img, invert=invert)  # this depends on the whole image
                 if rescale != 1.0:
                     img = transforms.resize_image(img, rsz=rescale)
-
-                yf, style = self._run_nets(img, net_avg=net_avg, 
+                yf, style = self._run_nets(img, net_avg=net_avg,
                                         augment=augment, tile=tile,
                                         tile_overlap=tile_overlap)
                 if resample:
