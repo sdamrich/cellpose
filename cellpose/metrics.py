@@ -175,7 +175,7 @@ def _intersection_over_union(masks_true, masks_pred):
     iou[np.isnan(iou)] = 0.0
     return iou
 
-def _true_positive(iou, th):
+def _true_positive(iou, th, return_matches=False):
     """ true positive at threshold th
     
     Parameters
@@ -198,7 +198,10 @@ def _true_positive(iou, th):
     true_ind, pred_ind = linear_sum_assignment(costs)
     match_ok = iou[true_ind, pred_ind] >= th
     tp = match_ok.sum()
-    return tp
+    if not return_matches:
+        return tp
+    else:
+        return tp, true_ind[match_ok], pred_ind[match_ok]
 
 def flow_error(maski, dP_net, use_gpu=False, device=None):
     """ error in flows from predicted masks vs flows predicted by network run on image
